@@ -244,9 +244,6 @@ class MainActivity : ComponentActivity() {
                     when (selectedOption) {
                         "Face detection" -> detectFaces(rotatedBitmap, onPhotoTaken)
                         "Contour detection" -> detectFaceContours(rotatedBitmap, onPhotoTaken)
-                        "Selfie segmentation" -> performSelfieSegmentation(rotatedBitmap) { segmentedBitmap ->
-                            onPhotoTaken(segmentedBitmap ?: rotatedBitmap, null)
-                        }
                         else -> onPhotoTaken(rotatedBitmap, null)
                     }
 
