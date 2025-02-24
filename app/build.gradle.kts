@@ -66,5 +66,6 @@ dependencies {
     //MLKit
     implementation(libs.mlkit.face.detection)
     implementation(libs.mlkit.segementation.selfie)
+    implementation(libs.mlkit.face.mesh)
 
 }
