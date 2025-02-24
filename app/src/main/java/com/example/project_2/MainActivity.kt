@@ -5,12 +5,14 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PointF
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -19,18 +21,33 @@ import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -42,10 +59,41 @@ import com.example.project_2.ui.theme.Project_2Theme
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.facemesh.FaceMeshDetection
+import com.google.mlkit.vision.facemesh.FaceMeshDetectorOptions
+import com.google.mlkit.vision.segmentation.Segmentation
+import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
+import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.math.max
 
 class MainActivity : ComponentActivity() {
+
+    private val FACE_MESH_CONNECTIONS = listOf(
+        Pair(10, 338), Pair(338, 297), Pair(297, 332), Pair(332, 284), Pair(284, 251), Pair(251, 389), Pair(389, 356), Pair(356, 454), Pair(454, 323), Pair(323, 361), Pair(361, 288), Pair(288, 397), Pair(397, 365), Pair(365, 379), Pair(379, 378), Pair(378, 400), Pair(400, 377), Pair(377, 152), Pair(152, 148), Pair(148, 176), Pair(176, 149), Pair(149, 150), Pair(150, 136), Pair(136, 172), Pair(172, 58), Pair(58, 132), Pair(132, 93), Pair(93, 234), Pair(234, 127), Pair(127, 162), Pair(162, 21), Pair(21, 54), Pair(54, 103), Pair(103, 67), Pair(67, 109), Pair(109, 10)
+    )
+
+    private val FACE_MESH_TRIANGLES = listOf(
+        Triple(10, 338, 297),
+        Triple(297, 332, 284),
+        Triple(284, 251, 389),
+        Triple(389, 356, 454),
+        Triple(454, 323, 361),
+        Triple(361, 288, 397),
+        Triple(397, 365, 379),
+        Triple(379, 378, 400),
+        Triple(400, 377, 152),
+        Triple(152, 148, 176),
+        Triple(176, 149, 150),
+        Triple(150, 136, 172),
+        Triple(172, 58, 132),
+        Triple(132, 93, 234),
+        Triple(234, 127, 162),
+        Triple(162, 21, 54),
+        Triple(54, 103, 67),
+        Triple(67, 109, 10)
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!hasRequiredPermission()) {
@@ -58,7 +106,7 @@ class MainActivity : ComponentActivity() {
                         setEnabledUseCases(
                             CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS
                         )
-                        cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA // Preview Camera is by default front cam
+                        cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                     }
                 }
 
@@ -244,6 +292,10 @@ class MainActivity : ComponentActivity() {
                     when (selectedOption) {
                         "Face detection" -> detectFaces(rotatedBitmap, onPhotoTaken)
                         "Contour detection" -> detectFaceContours(rotatedBitmap, onPhotoTaken)
+                        "Mesh detection" -> detectMesh(rotatedBitmap, onPhotoTaken)
+
+                        "Selfie segmentation" -> performSelfieSegmentation(rotatedBitmap) { segmentedBitmap ->
+                            onPhotoTaken(segmentedBitmap ?: rotatedBitmap, null)}
                         else -> onPhotoTaken(rotatedBitmap, null)
                     }
 
@@ -291,10 +343,8 @@ class MainActivity : ComponentActivity() {
                 Log.e("MLKit", "Face detection failed", e)
                 onResult(bitmap, 0)
             }
-
-
-
     }
+
 // Contour Detection
     private fun detectFaceContours(bitmap: Bitmap, onResult: (Bitmap, Int) -> Unit) {
         val image = InputImage.fromBitmap(bitmap, 0)
@@ -304,7 +354,6 @@ class MainActivity : ComponentActivity() {
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
             .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
-            .enableTracking()
             .build()
         val detector = FaceDetection.getClient(options)
 
@@ -324,7 +373,6 @@ class MainActivity : ComponentActivity() {
                     val bounds = face.boundingBox
                     canvas.drawRect(bounds, paint)
 
-                    // Draw face contours
                     val contourPaint = android.graphics.Paint().apply {
                         color = android.graphics.Color.GREEN
                         style = android.graphics.Paint.Style.STROKE
@@ -349,6 +397,151 @@ class MainActivity : ComponentActivity() {
             }
     }
 
+    private fun detectMesh(bitmap: Bitmap, onResult: (Bitmap, Int) -> Unit) {
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        val options = FaceMeshDetectorOptions.Builder().build()
+
+        val detector = FaceMeshDetection.getClient(options)
+
+        detector.process(image)
+            .addOnSuccessListener { faces ->
+                val processedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                val canvas = Canvas(processedBitmap)
+
+                val pointPaint = Paint().apply {
+                    color = Color.Green.toArgb()
+                    style = Paint.Style.FILL
+                    strokeWidth = 4f
+                }
+
+                val linePaint = Paint().apply {
+                    color = Color.White.toArgb()
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.5f
+                }
+
+                faces.forEach { face ->
+                    val points = face.allPoints
+
+                    val imageWidth = bitmap.width
+                    val imageHeight = bitmap.height
+                    Log.d("FaceMesh", "Image size: width=$imageWidth, height=$imageHeight")
+
+                    val boundingBox = face.boundingBox
+                    Log.d("FaceMesh", "Bounding box: $boundingBox")
+
+                    val filteredPoints = points.filter { point ->
+                        point.position.x >= boundingBox.left &&
+                                point.position.x <= boundingBox.right &&
+                                point.position.y >= boundingBox.top &&
+                                point.position.y <= boundingBox.bottom
+                    }
+
+                    Log.d("FaceMesh", "Filtered points: ${filteredPoints.size}")
+
+                    filteredPoints.forEachIndexed { index, point ->
+                        Log.d("FaceMesh", "Filtered Point $index: (${point.position.x}, ${point.position.y})")
+                    }
+
+                    val nearestNeighbors = mutableMapOf<Int, List<Int>>()
+                    for (i in filteredPoints.indices) {
+                        val currentPoint = filteredPoints[i]
+                        val distances = filteredPoints.mapIndexed { index, point ->
+                            val dx = point.position.x - currentPoint.position.x
+                            val dy = point.position.y - currentPoint.position.y
+                            val distance = dx * dx + dy * dy
+                            Pair(index, distance)
+                        }
+
+                        val nearest = distances
+                            .filter { it.first != i }
+                            .sortedBy { it.second }
+                            .take(6)
+                            .map { it.first }
+
+                        nearestNeighbors[i] = nearest
+                    }
+
+                    nearestNeighbors.forEach { (index, neighbors) ->
+                        val currentPoint = filteredPoints[index]
+                        val currentPixel = PointF(currentPoint.position.x, currentPoint.position.y)
+
+                        for (neighborIndex in neighbors) {
+                            val neighborPoint = filteredPoints[neighborIndex]
+                            val neighborPixel = PointF(neighborPoint.position.x, neighborPoint.position.y)
+
+                            canvas.drawLine(
+                                currentPixel.x, currentPixel.y,
+                                neighborPixel.x, neighborPixel.y,
+                                linePaint
+                            )
+                        }
+                    }
+
+                    filteredPoints.forEach { point ->
+                        val pixel = PointF(point.position.x, point.position.y)
+                        canvas.drawCircle(pixel.x, pixel.y, 2.5f, pointPaint)
+                    }
+                }
+
+                onResult(processedBitmap, faces.size)
+            }
+            .addOnFailureListener { e ->
+                Log.e("MLKit", "Mesh detection failed", e)
+                onResult(bitmap, 0)
+            }
+    }
+
+    private fun performSelfieSegmentation(bitmap: Bitmap, onResult: (Bitmap?) -> Unit) {
+        val options = SelfieSegmenterOptions.Builder()
+            .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
+            .build()
+
+        val segmenter = Segmentation.getClient(options)
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        segmenter.process(image)
+            .addOnSuccessListener { mask ->
+                val outputBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                applySegmentationMask(outputBitmap, mask.buffer, mask.width, mask.height)
+                onResult(outputBitmap)
+            }
+            .addOnFailureListener { e ->
+                Log.e("Segmentation", "Segmentation failed: ${e.message}")
+                onResult(bitmap) // Return original image on failure
+            }
+    }
+
+    private fun applySegmentationMask(
+        output: Bitmap,
+        maskBuffer: ByteBuffer,
+        maskWidth: Int,
+        maskHeight: Int
+    ) {
+        maskBuffer.rewind()
+        val maskBitmap = Bitmap.createBitmap(maskWidth, maskHeight, Bitmap.Config.ALPHA_8)
+
+        val pixels = IntArray(maskWidth * maskHeight)
+        for (i in pixels.indices) {
+            val alpha = (maskBuffer.float * 255).toInt().coerceIn(0, 255)
+            pixels[i] = android.graphics.Color.argb(alpha, 255, 255, 255)
+        }
+        maskBitmap.setPixels(pixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
+
+
+        val scaledMask = Bitmap.createScaledBitmap(maskBitmap, output.width, output.height, true)
+
+
+        val overlayPaint = Paint().apply {
+            color = android.graphics.Color.rgb(186, 85, 211) // Purple Tint
+            alpha = (0.5f * 255).toInt()
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+        }
+
+        val canvas = Canvas(output)
+        canvas.drawBitmap(scaledMask, 0f, 0f, overlayPaint)
+    }
 
     @Composable
     fun CameraPreview(
