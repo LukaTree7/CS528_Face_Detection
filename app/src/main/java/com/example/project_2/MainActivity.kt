@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -57,6 +58,7 @@ class MainActivity : ComponentActivity() {
                         setEnabledUseCases(
                             CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS
                         )
+                        cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA // Preview Camera is by default front cam
                     }
                 }
 
@@ -192,8 +194,8 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.padding(start = 8.dp)
                                     )
                                 }
-
-                                if (option == "Face detection" && faceCount != null && faceCount!! > 0) {
+// If the selected option is Face Detection and option is Face detection then only will this statement be printed
+                                if (selectedOption == "Face detection" && option == "Face detection" && faceCount != null && faceCount!! > 0) {
                                     Text(
                                         text = "$faceCount face${if (faceCount == 1) "" else "s"} detected",
                                         fontSize = 14.sp,
@@ -241,8 +243,13 @@ class MainActivity : ComponentActivity() {
 
                     when (selectedOption) {
                         "Face detection" -> detectFaces(rotatedBitmap, onPhotoTaken)
+                        "Contour detection" -> detectFaceContours(rotatedBitmap, onPhotoTaken)
+                        "Selfie segmentation" -> performSelfieSegmentation(rotatedBitmap) { segmentedBitmap ->
+                            onPhotoTaken(segmentedBitmap ?: rotatedBitmap, null)
+                        }
                         else -> onPhotoTaken(rotatedBitmap, null)
                     }
+
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -287,7 +294,64 @@ class MainActivity : ComponentActivity() {
                 Log.e("MLKit", "Face detection failed", e)
                 onResult(bitmap, 0)
             }
+
+
+
     }
+// Contour Detection
+    private fun detectFaceContours(bitmap: Bitmap, onResult: (Bitmap, Int) -> Unit) {
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        val options = FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+            .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
+            .enableTracking()
+            .build()
+        val detector = FaceDetection.getClient(options)
+
+        detector.process(image)
+            .addOnSuccessListener { faces ->
+                val faceCount = faces.size
+                val processedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                val canvas = android.graphics.Canvas(processedBitmap)
+                val paint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.RED
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = 3f
+                }
+
+                for (face in faces) {
+                    // Draw bounding box
+                    val bounds = face.boundingBox
+                    canvas.drawRect(bounds, paint)
+
+                    // Draw face contours
+                    val contourPaint = android.graphics.Paint().apply {
+                        color = android.graphics.Color.GREEN
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeWidth = 2f
+                    }
+
+                    for (contour in face.allContours) {
+                        val points = contour.points
+                        for (i in 1 until points.size) {
+                            val start = points[i - 1]
+                            val end = points[i]
+                            canvas.drawLine(start.x, start.y, end.x, end.y, contourPaint)
+                        }
+                    }
+                }
+
+                onResult(processedBitmap, faceCount)
+            }
+            .addOnFailureListener { e ->
+                Log.e("MLKit", "Face detection failed", e)
+                onResult(bitmap, 0)
+            }
+    }
+
 
     @Composable
     fun CameraPreview(
@@ -320,7 +384,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxSize()
             )
 
-            if (selectedOption == "Face detection" && capturedImage == null && faces.isNotEmpty()) {
+            if ((selectedOption == "Face detection" || selectedOption == "Contour detection") && capturedImage == null && faces.isNotEmpty()) {
                 Canvas(modifier = Modifier.matchParentSize()) {
                     faces.forEach { face ->
                         drawRect(
@@ -340,7 +404,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (selectedOption == "Face detection" && capturedImage == null) {
+        if ((selectedOption == "Face detection" || selectedOption == "Contour detection") && capturedImage == null) {
             LaunchedEffect(selectedOption) {
                 var lastDetectionTime = System.currentTimeMillis()
 
